@@ -41,39 +41,6 @@ const client = new Client({
     partials: [Partials.Message, Partials.Channel, Partials.Reaction]
 });
 
-// --- ADD THE KEEP-ALIVE SERVER HERE ---
-const http = require('http');
-const port = process.env.PORT || 10000;
-http.createServer((req, res) => {
-    res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('Bot is alive!');
-}).listen(port, () => {
-    console.log(`Keep-alive server listening on port ${port}`);
-});
-// --------------------------------------
-
-// Initialize Discord Client
-const client = new Client({
-    intents: [
-        GatewayIntentBits.Guilds,
-        GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.MessageContent,
-        GatewayIntentBits.GuildMembers
-    ],
-    partials: [Partials.Message, Partials.Channel, Partials.Reaction]
-});
-
-// Initialize Discord Client
-const client = new Client({
-    intents: [
-        GatewayIntentBits.Guilds,
-        GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.MessageContent,
-        GatewayIntentBits.GuildMembers
-    ],
-    partials: [Partials.Message, Partials.Channel, Partials.Reaction]
-});
-
 // Database Setup
 const db = new Database(path.join(__dirname, 'tickets.db'));
 
