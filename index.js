@@ -41,9 +41,6 @@ const client = new Client({
     partials: [Partials.Message, Partials.Channel, Partials.Reaction]
 });
 
-// Database Setup
-const db = new Database(path.join(__dirname, 'tickets.db'));
-
 // Create Database Tables
 db.exec(`
     CREATE TABLE IF NOT EXISTS config (
