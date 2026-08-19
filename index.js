@@ -19,9 +19,9 @@ const {
 const Database = require('better-sqlite3');
 const path = require('path');
 const fs = require('fs');
-
-// --- ADD THE KEEP-ALIVE SERVER HERE ---
 const http = require('http');
+
+// HTTP Keep-Alive Server for Render
 const port = process.env.PORT || 10000;
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
@@ -29,7 +29,6 @@ http.createServer((req, res) => {
 }).listen(port, () => {
     console.log(`Keep-alive server listening on port ${port}`);
 });
-// --------------------------------------
 
 // Initialize Discord Client
 const client = new Client({
