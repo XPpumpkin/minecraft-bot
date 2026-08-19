@@ -39,11 +39,22 @@ const client = new Client({
 
 // In-Memory Database Stores
 const tempAnnounceData = new Map();
-const tokenGuildConfigs = new Map();
+const autoResponders = new Map();
+const tokenGuildConfigs = new Map(); 
 const blacklistedUsers = new Set();
 const userActiveTickets = new Map(); // userId -> activeTicketChannelId
 const ticketStats = new Map(); // staffId -> resolvedCount
 let globalTicketCounter = 1; // Sequential Counter (0001, 0002, etc.)
+
+function isValidUrl(urlString) {
+    if (!urlString) return false;
+    try {
+        const url = new URL(urlString);
+        return url.protocol === 'http:' || url.protocol === 'https:';
+    } catch (_) {
+        return false;
+    }
+}
 
 // 3. Register Slash Commands
 const commands = [
@@ -54,25 +65,32 @@ const commands = [
         .addChannelOption(opt => opt.setName('channel').setDescription('Target Channel').setRequired(true))
         .addBooleanOption(opt => opt.setName('dm').setDescription('Send to all member DMs? (Optional)'))
         .addStringOption(opt => opt.setName('title').setDescription('Embed Title (Optional)'))
-        .addStringOption(opt => opt.setName('color').setDescription('Hex Color e.g. #FF0000 (Optional)'))
+        .addStringOption(opt => opt.setName('color').setDescription('Hex Color e.g. #FF0000 or #00FF88 (Optional)'))
         .addStringOption(opt => opt.setName('author_name').setDescription('Author Header Name (Optional)'))
         .addStringOption(opt => opt.setName('author_icon').setDescription('Author Icon URL (Optional)'))
-        .addStringOption(opt => opt.setName('thumbnail').setDescription('Thumbnail Image URL (Optional)'))
-        .addStringOption(opt => opt.setName('field1_title').setDescription('Field 1 Title (Optional)'))
-        .addStringOption(opt => opt.setName('field2_title').setDescription('Field 2 Title (Optional)'))
-        .addStringOption(opt => opt.setName('field3_title').setDescription('Field 3 Title (Optional)'))
-        .addStringOption(opt => opt.setName('footer_text').setDescription('Footer Text (Optional)'))
-        .addStringOption(opt => opt.setName('footer_icon').setDescription('Footer Icon URL (Optional)')),
+        .addStringOption(opt => opt.setName('thumbnail').setDescription('Thumbnail Image URL at top right (Optional)'))
+        .addStringOption(opt => opt.setName('field1_title').setDescription('Field 1 Header Title (Optional)'))
+        .addStringOption(opt => opt.setName('field2_title').setDescription('Field 2 Header Title (Optional)'))
+        .addStringOption(opt => opt.setName('field3_title').setDescription('Field 3 Header Title (Optional)'))
+        .addStringOption(opt => opt.setName('footer_text').setDescription('Footer Text at bottom (Optional)'))
+        .addStringOption(opt => opt.setName('footer_icon').setDescription('Footer Small Icon URL (Optional)')),
+
+    new SlashCommandBuilder()
+        .setName('autorespond')
+        .setDescription('Set up an automatic reply trigger')
+        .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages)
+        .addStringOption(opt => opt.setName('trigger').setDescription('Word/phrase to listen for').setRequired(true))
+        .addStringOption(opt => opt.setName('reply').setDescription('Bot response').setRequired(true)),
 
     // --- FULL R.O.T.I HELP DESK COMMANDS ---
     new SlashCommandBuilder()
         .setName('token-setup')
-        .setDescription('Send the interactive R.O.T.I ticket panel to a channel')
+        .setDescription('Send the R.O.T.I ticket panel to a channel')
         .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
         .addChannelOption(opt => opt.setName('channel').setDescription('Channel for the panel').setRequired(true))
-        .addRoleOption(opt => opt.setName('support_role').setDescription('Staff role for isolation').setRequired(true))
-        .addChannelOption(opt => opt.setName('category').setDescription('Category for ticket channels').addChannelTypes(ChannelType.GuildCategory))
-        .addChannelOption(opt => opt.setName('logs_channel').setDescription('Channel for ticket transcripts').addChannelTypes(ChannelType.GuildText)),
+        .addRoleOption(opt => opt.setName('support_role').setDescription('Staff role that manages tickets').setRequired(true))
+        .addChannelOption(opt => opt.setName('category').setDescription('Category channel for tickets').addChannelTypes(ChannelType.GuildCategory))
+        .addChannelOption(opt => opt.setName('logs_channel').setDescription('Channel for transcripts').addChannelTypes(ChannelType.GuildText)),
 
     new SlashCommandBuilder()
         .setName('ticket-add')
@@ -91,8 +109,8 @@ const commands = [
 
     new SlashCommandBuilder()
         .setName('ticket-close')
-        .setDescription('Close and lock the current ticket')
-        .addStringOption(opt => opt.setName('reason').setDescription('Reason for closure')),
+        .setDescription('Close and archive the current ticket')
+        .addStringOption(opt => opt.setName('reason').setDescription('Reason for closing ticket')),
 
     new SlashCommandBuilder()
         .setName('ticket-reopen')
@@ -100,16 +118,28 @@ const commands = [
 
     new SlashCommandBuilder()
         .setName('ticket-delete')
-        .setDescription('Delete channel and post official transcript log')
+        .setDescription('Delete ticket channel and generate transcript')
         .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages),
 
     new SlashCommandBuilder()
         .setName('ticket-transcript')
-        .setDescription('Generate full transcript of this support session'),
+        .setDescription('Generate full transcript of this ticket session'),
 
     new SlashCommandBuilder()
         .setName('ticket-claim')
         .setDescription('Claim this ticket as staff'),
+
+    new SlashCommandBuilder()
+        .setName('ticket-priority')
+        .setDescription('Set the priority level of this ticket')
+        .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages)
+        .addStringOption(opt => opt.setName('level').setDescription('Priority level').setRequired(true)
+            .addChoices(
+                { name: '🟢 Low', value: 'Low' },
+                { name: '🟡 Medium', value: 'Medium' },
+                { name: '🟠 High', value: 'High' },
+                { name: '🔴 Urgent', value: 'Urgent' }
+            )),
 
     new SlashCommandBuilder()
         .setName('ticket-blacklist')
@@ -127,20 +157,15 @@ const commands = [
 client.once('clientReady', async () => {
     console.log(`LoggedIn as ${client.user.tag}`);
     const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
-    const GUILD_ID = '1532296511096885378';
-
     try {
-        await rest.put(
-            Routes.applicationGuildCommands(process.env.CLIENT_ID, GUILD_ID),
-            { body: commands }
-        );
-        console.log(`R.O.T.I Module registered to Guild: ${GUILD_ID}`);
+        await rest.put(Routes.applicationCommands(process.env.CLIENT_ID), { body: commands });
+        console.log('Slash commands registered successfully!');
     } catch (err) {
         console.error('Error registering commands:', err);
     }
 });
 
-// Helper: Transcript Generator
+// Helper: Generate Text Transcript File
 async function generateTranscript(channel) {
     let messages = [];
     let lastId;
@@ -148,6 +173,7 @@ async function generateTranscript(channel) {
     while (true) {
         const options = { limit: 100 };
         if (lastId) options.before = lastId;
+        
         const fetched = await channel.messages.fetch(options);
         messages.push(...fetched.values());
         if (fetched.size < 100) break;
@@ -158,13 +184,13 @@ async function generateTranscript(channel) {
 
     let transcriptText = `==================================================\n`;
     transcriptText += `R.O.T.I OFFICIAL TRANSCRIPT: #${channel.name}\n`;
-    transcriptText += `DATE: ${new Date().toUTCString()}\n`;
+    transcriptText += `GENERATED ON: ${new Date().toUTCString()}\n`;
     transcriptText += `==================================================\n\n`;
 
     messages.forEach(msg => {
         const timestamp = msg.createdAt.toISOString().replace('T', ' ').substring(0, 19);
         const author = `${msg.author.tag} (${msg.author.id})`;
-        const content = msg.content || (msg.embeds.length > 0 ? '[Embed Content]' : '[Attachment]');
+        const content = msg.content || (msg.embeds.length > 0 ? '[Embed Message]' : '[No Text Content]');
         
         transcriptText += `[${timestamp}] ${author}:\n${content}\n`;
         if (msg.attachments.size > 0) {
@@ -191,7 +217,9 @@ async function purgeTicketSession(channel, closedBy, reason = 'No reason provide
         if (firstMsg && firstMsg.mentions.users.size > 0) {
             tokenOpener = firstMsg.mentions.users.first();
         }
-    } catch (e) {}
+    } catch (e) {
+        console.error('Error finding token opener:', e);
+    }
 
     if (closedBy && !closedBy.bot) {
         const currentCount = ticketStats.get(closedBy.id) || 0;
@@ -208,7 +236,7 @@ async function purgeTicketSession(channel, closedBy, reason = 'No reason provide
         .addFields(
             { name: '📁 Ticket Channel', value: `\`${channel.name}\``, inline: true },
             { name: '👤 Closed By', value: `${closedBy}`, inline: true },
-            { name: '👤 Ticket Owner', value: tokenOpener ? `${tokenOpener}` : 'Unknown', inline: true },
+            { name: '👤 Opened By', value: tokenOpener ? `${tokenOpener}` : 'Unknown', inline: true },
             { name: '📝 Reason', value: `\`\`\`${reason}\`\`\``, inline: false }
         )
         .setTimestamp();
@@ -216,7 +244,7 @@ async function purgeTicketSession(channel, closedBy, reason = 'No reason provide
     if (tokenOpener) {
         try {
             await tokenOpener.send({
-                content: `📄 Official transcript log for your ticket in **${guild.name}**:`,
+                content: `📄 Here is the official transcript log for your closed ticket in **${guild.name}**:`,
                 embeds: [logEmbed],
                 files: [attachment]
             });
@@ -235,17 +263,24 @@ async function purgeTicketSession(channel, closedBy, reason = 'No reason provide
     setTimeout(() => channel.delete().catch(() => {}), 3000);
 }
 
-// Helper: Create Sequential Ticket Channel
+// 5. Auto-Responder Engine
+client.on('messageCreate', (msg) => {
+    if (msg.author.bot) return;
+    const trigger = msg.content.toLowerCase();
+    if (autoResponders.has(trigger)) {
+        msg.reply(autoResponders.get(trigger));
+    }
+});
+
+// Helper for Sequential R.O.T.I Ticket Channel Creation
 async function createTokenChannel(interaction, categoryValue, reason) {
     const guild = interaction.guild;
     const user = interaction.user;
 
-    // Abuse Check 1: Blacklist
     if (blacklistedUsers.has(user.id)) {
-        return interaction.reply({ content: '❌ You are blacklisted from opening support tickets.', ephemeral: true });
+        return interaction.reply({ content: '❌ You are blacklisted from opening tickets.', ephemeral: true });
     }
 
-    // Abuse Check 2: Ticket Limit
     if (userActiveTickets.has(user.id)) {
         const existingChannelId = userActiveTickets.get(user.id);
         if (guild.channels.cache.has(existingChannelId)) {
@@ -263,8 +298,20 @@ async function createTokenChannel(interaction, categoryValue, reason) {
     }
 
     let category = categoryId ? guild.channels.cache.get(categoryId) : null;
+    if (!category) {
+        category = guild.channels.cache.find(c => c.name.toLowerCase() === 'tickets' && c.type === ChannelType.GuildCategory);
+        if (!category) {
+            try {
+                category = await guild.channels.create({
+                    name: 'Tickets',
+                    type: ChannelType.GuildCategory
+                });
+            } catch (e) {
+                category = null;
+            }
+        }
+    }
 
-    // Sequential ID generation: ticket-0001, ticket-0002, etc.
     const formattedId = String(globalTicketCounter++).padStart(4, '0');
     const channelName = `ticket-${formattedId}`;
 
@@ -289,7 +336,8 @@ async function createTokenChannel(interaction, categoryValue, reason) {
             .addFields(
                 { name: '👤 Opened By', value: `${user}`, inline: true },
                 { name: '📌 Category', value: `\`${categoryValue}\``, inline: true },
-                { name: '📝 Reason / Subject', value: `\`\`\`${reason}\`\`\``, inline: false }
+                { name: '📝 Reason / Subject', value: `\`\`\`${reason}\`\`\``, inline: false },
+                { name: '⚙️ Control Panel', value: 'Use the action buttons below to manage this session.' }
             )
             .setFooter({ text: `Ticket ID: #${formattedId} • R.O.T.I Help Desk`, iconURL: guild.iconURL() || undefined })
             .setTimestamp();
@@ -304,17 +352,19 @@ async function createTokenChannel(interaction, categoryValue, reason) {
         await interaction.reply({ content: `✅ Ticket created! Head over to ${channel}`, ephemeral: true });
     } catch (err) {
         console.error('Error creating ticket channel:', err);
-        await interaction.reply({ content: '❌ Failed to create ticket channel.', ephemeral: true });
+        await interaction.reply({ content: '❌ Failed to create ticket channel. Please check bot permissions.', ephemeral: true });
     }
 }
 
-// 5. Interaction Router
+// 6. Interaction Router
 client.on('interactionCreate', async (interaction) => {
 
     // --- Command: /announce ---
     if (interaction.isChatInputCommand() && interaction.commandName === 'announce') {
         const hasPerms = interaction.memberPermissions?.has(PermissionFlagsBits.Administrator) || interaction.memberPermissions?.has(PermissionFlagsBits.ManageMessages);
-        if (!hasPerms) return interaction.reply({ content: '❌ Invalid permissions!', ephemeral: true });
+        if (!hasPerms) {
+            return interaction.reply({ content: '❌ You need Administrator or Manage Messages permissions to use this command!', ephemeral: true });
+        }
 
         tempAnnounceData.set(interaction.user.id, {
             channelId: interaction.options.getChannel('channel').id,
@@ -331,34 +381,107 @@ client.on('interactionCreate', async (interaction) => {
             footerIcon: interaction.options.getString('footer_icon')
         });
 
-        const modal = new ModalBuilder().setCustomId('announceModal').setTitle('Announcement Builder');
+        const modal = new ModalBuilder()
+            .setCustomId('announceModal')
+            .setTitle('Announcement Description & Values');
+
+        const descInput = new TextInputBuilder()
+            .setCustomId('descInput')
+            .setLabel("1. Description (Main Message)")
+            .setStyle(TextInputStyle.Paragraph)
+            .setPlaceholder("Paste main announcement text here...")
+            .setRequired(true);
+
+        const field1Input = new TextInputBuilder().setCustomId('field1Input').setLabel("2. Field 1 Value (Optional)").setStyle(TextInputStyle.Paragraph).setRequired(false);
+        const field2Input = new TextInputBuilder().setCustomId('field2Input').setLabel("3. Field 2 Value (Optional)").setStyle(TextInputStyle.Paragraph).setRequired(false);
+        const field3Input = new TextInputBuilder().setCustomId('field3Input').setLabel("4. Field 3 Value (Optional)").setStyle(TextInputStyle.Paragraph).setRequired(false);
+        const imageInput = new TextInputBuilder().setCustomId('imageInput').setLabel("5. Image / Banner URL (Optional)").setStyle(TextInputStyle.Short).setRequired(false);
+
         modal.addComponents(
-            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('descInput').setLabel("Description").setStyle(TextInputStyle.Paragraph).setRequired(true)),
-            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('field1Input').setLabel("Field 1 (Optional)").setStyle(TextInputStyle.Paragraph).setRequired(false)),
-            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('field2Input').setLabel("Field 2 (Optional)").setStyle(TextInputStyle.Paragraph).setRequired(false)),
-            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('field3Input').setLabel("Field 3 (Optional)").setStyle(TextInputStyle.Paragraph).setRequired(false)),
-            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('imageInput').setLabel("Image URL (Optional)").setStyle(TextInputStyle.Short).setRequired(false))
+            new ActionRowBuilder().addComponents(descInput),
+            new ActionRowBuilder().addComponents(field1Input),
+            new ActionRowBuilder().addComponents(field2Input),
+            new ActionRowBuilder().addComponents(field3Input),
+            new ActionRowBuilder().addComponents(imageInput)
         );
+
         await interaction.showModal(modal);
     }
 
     if (interaction.isModalSubmit() && interaction.customId === 'announceModal') {
         await interaction.deferReply({ ephemeral: true });
+
         const options = tempAnnounceData.get(interaction.user.id);
-        if (!options) return interaction.editReply('Session expired.');
+        if (!options) return interaction.editReply('Session expired! Please run /announce again.');
 
         const targetChannel = interaction.guild.channels.cache.get(options.channelId);
         const description = interaction.fields.getTextInputValue('descInput');
-        const embed = new EmbedBuilder().setDescription(description).setColor(options.color.startsWith('#') ? options.color : `#${options.color}`);
+        const field1Val = interaction.fields.getTextInputValue('field1Input');
+        const field2Val = interaction.fields.getTextInputValue('field2Input');
+        const field3Val = interaction.fields.getTextInputValue('field3Input');
+        const imageUrl = interaction.fields.getTextInputValue('imageInput');
+
+        let color = options.color;
+        if (!color.startsWith('#')) color = `#${color}`;
+
+        const embed = new EmbedBuilder().setDescription(description);
+        try { embed.setColor(color); } catch (e) { embed.setColor('#FFD700'); }
 
         if (options.title) embed.setTitle(options.title);
+        if (options.authorName) {
+            embed.setAuthor({
+                name: options.authorName,
+                iconURL: isValidUrl(options.authorIcon) ? options.authorIcon : undefined
+            });
+        }
+        if (isValidUrl(options.thumbnail)) embed.setThumbnail(options.thumbnail);
+        if (field1Val) embed.addFields({ name: options.field1Title || '\u200B', value: field1Val, inline: false });
+        if (field2Val) embed.addFields({ name: options.field2Title || '\u200B', value: field2Val, inline: false });
+        if (field3Val) embed.addFields({ name: options.field3Title || '\u200B', value: field3Val, inline: false });
+        if (isValidUrl(imageUrl)) embed.setImage(imageUrl);
+
+        if (options.footerText) {
+            embed.setFooter({
+                text: options.footerText,
+                iconURL: isValidUrl(options.footerIcon) ? options.footerIcon : undefined
+            });
+        }
+
         if (targetChannel) {
             await targetChannel.send({ embeds: [embed] });
-            await interaction.editReply('Announcement posted!');
+            if (options.sendDM) {
+                try {
+                    const members = await interaction.guild.members.fetch();
+                    for (const [, m] of members) {
+                        if (!m.user.bot) {
+                            try { await m.send({ embeds: [embed] }); } catch (e) {}
+                        }
+                    }
+                } catch (dmErr) {
+                    console.error('Error fetching members for DM:', dmErr);
+                }
+            }
+            await interaction.editReply('Announcement posted successfully!');
+        } else {
+            await interaction.editReply('Channel not found!');
         }
+        tempAnnounceData.delete(interaction.user.id);
     }
 
-    // --- Panel Creation ---
+    // --- Command: /autorespond ---
+    if (interaction.isChatInputCommand() && interaction.commandName === 'autorespond') {
+        const hasPerms = interaction.memberPermissions?.has(PermissionFlagsBits.ManageMessages) || interaction.memberPermissions?.has(PermissionFlagsBits.Administrator);
+        if (!hasPerms) {
+            return interaction.reply({ content: '❌ You need Manage Messages or Administrator permissions to set auto-responders!', ephemeral: true });
+        }
+        const trigger = interaction.options.getString('trigger').toLowerCase();
+        const reply = interaction.options.getString('reply');
+        autoResponders.set(trigger, reply);
+        await interaction.reply({ content: `Auto-responder set for \`${trigger}\`!`, ephemeral: true });
+    }
+
+    // --- R.O.T.I HELP DESK SYSTEM ---
+
     if (interaction.isChatInputCommand() && interaction.commandName === 'token-setup') {
         const targetChannel = interaction.options.getChannel('channel');
         const supportRole = interaction.options.getRole('support_role');
@@ -374,34 +497,43 @@ client.on('interactionCreate', async (interaction) => {
         const panelEmbed = new EmbedBuilder()
             .setColor('#2B2D31')
             .setTitle('📩 Support Ticket Portal')
-            .setDescription('Need assistance, have an inquiry, or want to submit a request?\n\nSelect a category from the dropdown menu below to open a ticket.')
+            .setDescription('Need assistance, have an inquiry, or want to submit a request?\n\nSelect the appropriate category from the dropdown menu below to open a ticket with our team.')
             .addFields(
                 { name: '⚙️ General Support', value: 'Questions regarding the server, account, or rules.', inline: true },
-                { name: '🐛 Bug / Technical', value: 'Report bugs or tech glitches.', inline: true },
-                { name: '💼 Billing / Donator', value: 'Assistance with store items or perks.', inline: true }
+                { name: '🐛 Bug / Technical Report', value: 'Report bugs or tech glitches.', inline: true },
+                { name: '💼 Billing / Donator Request', value: 'Assistance with store items or perks.', inline: true }
             )
-            .setFooter({ text: 'R.O.T.I Token Module • Select below to proceed', iconURL: interaction.guild.iconURL() || undefined });
+            .setFooter({ text: 'R.O.T.I Help Desk • Select below to proceed', iconURL: interaction.guild.iconURL() || undefined });
 
         const selectMenu = new StringSelectMenuBuilder()
             .setCustomId('token_category_select')
-            .setPlaceholder('Select category...')
+            .setPlaceholder('Click here to select a ticket category...')
             .addOptions(
-                new StringSelectMenuOptionBuilder().setLabel('General Support').setValue('general').setEmoji('⚙️'),
-                new StringSelectMenuOptionBuilder().setLabel('Bug / Technical Report').setValue('bug').setEmoji('🐛'),
-                new StringSelectMenuOptionBuilder().setLabel('Billing / Donator Request').setValue('billing').setEmoji('💼')
+                new StringSelectMenuOptionBuilder().setLabel('General Support').setValue('general').setDescription('General questions or help').setEmoji('💬'),
+                new StringSelectMenuOptionBuilder().setLabel('Bug Report').setValue('bug').setDescription('Report broken features or bugs').setEmoji('🐛'),
+                new StringSelectMenuOptionBuilder().setLabel('Billing / Store').setValue('billing').setDescription('Store transactions or billing inquiry').setEmoji('💳'),
+                new StringSelectMenuOptionBuilder().setLabel('Other Inquiry').setValue('other').setDescription('Anything else not listed above').setEmoji('❓')
             );
 
         await targetChannel.send({ embeds: [panelEmbed], components: [new ActionRowBuilder().addComponents(selectMenu)] });
-        await interaction.reply({ content: `✅ Ticket panel posted to ${targetChannel}!`, ephemeral: true });
+        await interaction.reply({ content: `✅ Ticket panel posted to ${targetChannel}! Logs channel: ${logsChannel ? logsChannel : 'None set'}.`, ephemeral: true });
     }
 
-    // --- Category Selection ---
     if (interaction.isStringSelectMenu() && interaction.customId === 'token_category_select') {
         const selectedCategory = interaction.values[0];
-        const modal = new ModalBuilder().setCustomId(`token_create_modal_${selectedCategory}`).setTitle('Open Support Ticket');
-        modal.addComponents(new ActionRowBuilder().addComponents(
-            new TextInputBuilder().setCustomId('token_reason').setLabel('Reason / Topic').setStyle(TextInputStyle.Paragraph).setRequired(true)
-        ));
+
+        const modal = new ModalBuilder()
+            .setCustomId(`token_create_modal_${selectedCategory}`)
+            .setTitle('Ticket Opening Form');
+
+        const reasonInput = new TextInputBuilder()
+            .setCustomId('token_reason')
+            .setLabel('Describe your request or issue')
+            .setStyle(TextInputStyle.Paragraph)
+            .setPlaceholder('Enter brief details here...')
+            .setRequired(true);
+
+        modal.addComponents(new ActionRowBuilder().addComponents(reasonInput));
         await interaction.showModal(modal);
     }
 
@@ -411,7 +543,6 @@ client.on('interactionCreate', async (interaction) => {
         await createTokenChannel(interaction, categoryValue, reason);
     }
 
-    // --- Ticket Buttons ---
     if (interaction.isButton()) {
         if (interaction.customId === 'token_close_btn') {
             await interaction.channel.permissionOverwrites.edit(interaction.guild.roles.everyone, { SendMessages: false });
@@ -429,7 +560,12 @@ client.on('interactionCreate', async (interaction) => {
         }
     }
 
-    // --- Chat Commands ---
+    if (interaction.isStringSelectMenu() && interaction.customId === 'token_priority_select') {
+        const level = interaction.values[0];
+        await interaction.update({ content: `✅ Priority set to **${level}**.`, components: [] });
+        await interaction.channel.send({ embeds: [new EmbedBuilder().setColor('#FEE75C').setDescription(`⚡ Ticket priority updated to **${level}** by ${interaction.user}.`)] });
+    }
+
     if (interaction.isChatInputCommand()) {
         const { commandName, channel, options } = interaction;
 
@@ -470,6 +606,15 @@ client.on('interactionCreate', async (interaction) => {
             await interaction.deferReply();
             const attachment = await generateTranscript(channel);
             await interaction.editReply({ content: '📄 Here is the full chat transcript:', files: [attachment] });
+        }
+
+        if (commandName === 'ticket-claim') {
+            await interaction.reply({ embeds: [new EmbedBuilder().setColor('#57F287').setDescription(`🙋‍♂️ Ticket claimed by ${interaction.user}!`)] });
+        }
+
+        if (commandName === 'ticket-priority') {
+            const level = options.getString('level');
+            await interaction.reply({ embeds: [new EmbedBuilder().setColor('#FEE75C').setDescription(`⚡ Priority set to **${level}** by ${interaction.user}.`)] });
         }
 
         if (commandName === 'ticket-blacklist') {
