@@ -51,6 +51,7 @@ const customButtonActions = new Map();
 
 // Helper Functions
 function isValidUrl(string) {
+    if (!string) return false;
     try {
         new URL(string);
         return true;
@@ -127,7 +128,7 @@ client.on('interactionCreate', async (interaction) => {
         const title = interaction.options.getString('title');
         const authorName = interaction.options.getString('author_name');
         const authorIcon = interaction.options.getString('author_icon');
-        const thumbnail = interaction.options.getString('thumbnail');
+        const thumbnail = interaction.options.getString('thumbnail'); // Moved to slash command options
         const field1Title = interaction.options.getString('field1_title');
         const field2Title = interaction.options.getString('field2_title');
         const field3Title = interaction.options.getString('field3_title');
@@ -153,14 +154,14 @@ client.on('interactionCreate', async (interaction) => {
         const field1Input = new TextInputBuilder().setCustomId('field1Input').setLabel("2. Field 1 Value (Optional)").setStyle(TextInputStyle.Paragraph).setRequired(false);
         const field2Input = new TextInputBuilder().setCustomId('field2Input').setLabel("3. Field 2 Value (Optional)").setStyle(TextInputStyle.Paragraph).setRequired(false);
         const field3Input = new TextInputBuilder().setCustomId('field3Input').setLabel("4. Field 3 Value (Optional)").setStyle(TextInputStyle.Paragraph).setRequired(false);
-        const imageInput = new TextInputBuilder().setCustomId('imageInput').setLabel("5. Image / Banner URL (Optional)").setStyle(TextInputStyle.Short).setRequired(false);
+        const contentInput = new TextInputBuilder().setCustomId('contentInput').setLabel("5. Message Content (Outside Embed)").setStyle(TextInputStyle.Paragraph).setRequired(false);
 
         modal.addComponents(
             new ActionRowBuilder().addComponents(descInput),
             new ActionRowBuilder().addComponents(field1Input),
             new ActionRowBuilder().addComponents(field2Input),
             new ActionRowBuilder().addComponents(field3Input),
-            new ActionRowBuilder().addComponents(imageInput)
+            new ActionRowBuilder().addComponents(contentInput)
         );
 
         await interaction.showModal(modal);
@@ -178,7 +179,7 @@ client.on('interactionCreate', async (interaction) => {
         const field1Val = interaction.fields.getTextInputValue('field1Input');
         const field2Val = interaction.fields.getTextInputValue('field2Input');
         const field3Val = interaction.fields.getTextInputValue('field3Input');
-        const imageUrl = interaction.fields.getTextInputValue('imageInput');
+        const outsideContent = interaction.fields.getTextInputValue('contentInput');
 
         let color = options.color;
         if (!color.startsWith('#')) color = `#${color}`;
@@ -197,7 +198,6 @@ client.on('interactionCreate', async (interaction) => {
         if (field1Val) embed.addFields({ name: options.field1Title || '\u200B', value: field1Val, inline: false });
         if (field2Val) embed.addFields({ name: options.field2Title || '\u200B', value: field2Val, inline: false });
         if (field3Val) embed.addFields({ name: options.field3Title || '\u200B', value: field3Val, inline: false });
-        if (isValidUrl(imageUrl)) embed.setImage(imageUrl);
 
         if (options.footerText) {
             embed.setFooter({
@@ -206,14 +206,24 @@ client.on('interactionCreate', async (interaction) => {
             });
         }
 
+        const messagePayload = { embeds: [embed] };
+        if (outsideContent) {
+            messagePayload.content = outsideContent;
+        }
+
         if (targetChannel) {
-            await targetChannel.send({ embeds: [embed] });
+            await targetChannel.send(messagePayload);
+
             if (options.sendDM) {
                 try {
                     const members = await interaction.guild.members.fetch();
-                    for (const [, m] of members) {
-                        if (!m.user.bot) {
-                            try { await m.send({ embeds: [embed] }); } catch (e) {}
+                    for (const [, member] of members) {
+                        if (!member.user.bot) {
+                            try { 
+                                await member.send(messagePayload); 
+                            } catch (e) {
+                                // Handles blocked DMs or closed privacy settings quietly
+                            }
                         }
                     }
                 } catch (dmErr) {
