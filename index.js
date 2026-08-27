@@ -15,6 +15,15 @@ const {
 } = require('discord.js');
 const http = require('http');
 
+// Global Unhandled Error Catchers (Prevents silent hanging)
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('❌ Unhandled Rejection:', reason);
+});
+
+process.on('uncaughtException', (err) => {
+    console.error('❌ Uncaught Exception:', err);
+});
+
 // HTTP Keep-Alive Server for Render
 const port = process.env.PORT || 10000;
 http.createServer((req, res) => {
@@ -394,5 +403,12 @@ client.on('interactionCreate', async (interaction) => {
     }
 });
 
-// Login Bot
-client.login(process.env.DISCORD_TOKEN);
+// Robust Login Handling with Error Catching
+console.log('🔄 Attempting login to Discord Gateway...');
+if (!process.env.DISCORD_TOKEN) {
+    console.error('❌ DISCORD_TOKEN is missing from environment variables!');
+} else {
+    client.login(process.env.DISCORD_TOKEN).catch((err) => {
+        console.error('❌ FAILED TO LOG IN TO DISCORD:', err.message);
+    });
+}
