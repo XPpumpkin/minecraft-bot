@@ -403,12 +403,15 @@ client.on('interactionCreate', async (interaction) => {
     }
 });
 
-// Robust Login Handling with Error Catching
+// Robust Login Handling with Error Catching & Debugging
+const token = process.env.DISCORD_TOKEN;
+
 console.log('🔄 Attempting login to Discord Gateway...');
-if (!process.env.DISCORD_TOKEN) {
-    console.error('❌ DISCORD_TOKEN is missing from environment variables!');
+if (!token) {
+    console.error('❌ CRITICAL: process.env.DISCORD_TOKEN is EMPTY or UNDEFINED!');
 } else {
-    client.login(process.env.DISCORD_TOKEN).catch((err) => {
-        console.error('❌ FAILED TO LOG IN TO DISCORD:', err.message);
-    });
+    console.log(`🔑 Token detected! (Length: ${token.length} chars)`);
+    client.login(token)
+        .then(() => console.log('🎉 Login promise resolved!'))
+        .catch((err) => console.error('❌ DISCORD LOGIN REJECTED:', err));
 }
