@@ -24,15 +24,6 @@ process.on('uncaughtException', (err) => {
     console.error('❌ Uncaught Exception:', err);
 });
 
-// HTTP Keep-Alive Server for Render / Uptime Monitoring
-const port = process.env.PORT || 10000;
-http.createServer((req, res) => {
-    res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('Bot is alive!');
-}).listen(port, () => {
-    console.log(`Keep-alive server listening on port ${port}`);
-});
-
 // Initialize Discord Client
 const client = new Client({
     intents: [
@@ -430,15 +421,25 @@ client.on('interactionCreate', async (interaction) => {
     }
 });
 
-// Robust Login Handling
-const token = process.env.DISCORD_TOKEN;
+// --- HTTP Keep-Alive Server & Discord Login Initialization ---
+const port = process.env.PORT || 10000;
+const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('Bot is alive!');
+});
 
-console.log('🔄 Attempting login to Discord Gateway...');
-if (!token) {
-    console.error('❌ CRITICAL: process.env.DISCORD_TOKEN is EMPTY or UNDEFINED!');
-} else {
-    console.log(`🔑 Token detected! (Length: ${token.length} chars)`);
-    client.login(token)
-        .then(() => console.log('🎉 Login promise resolved!'))
-        .catch((err) => console.error('❌ DISCORD LOGIN REJECTED:', err));
-}
+server.listen(port, () => {
+    console.log(`Keep-alive server listening on port ${port}`);
+
+    // Trigger login ONLY AFTER the HTTP server successfully binds to port 10000
+    const token = process.env.DISCORD_TOKEN;
+    console.log('🔄 Attempting login to Discord Gateway...');
+    if (!token) {
+        console.error('❌ CRITICAL: process.env.DISCORD_TOKEN is EMPTY or UNDEFINED!');
+    } else {
+        console.log(`🔑 Token detected! (Length: ${token.length} chars)`);
+        client.login(token)
+            .then(() => console.log('🎉 Login promise resolved!'))
+            .catch((err) => console.error('❌ DISCORD LOGIN REJECTED:', err));
+    }
+});
