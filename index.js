@@ -44,6 +44,10 @@ const client = new Client({
     partials: [Partials.Message, Partials.Channel, Partials.Reaction]
 });
 
+// --- DEBUG LOGGERS (Monitors Gateway & WebSocket Handshakes) ---
+client.on('debug', (info) => console.log(`🔍 [DEBUG]: ${info}`));
+client.on('warn', (warning) => console.warn(`⚠️ [WARN]: ${warning}`));
+
 // System Configurations
 const config = {
     colors: {
@@ -223,7 +227,6 @@ client.on('interactionCreate', async (interaction) => {
                 });
             }
             
-            // Fixed thumbnail vs main image assignment logic
             if (isValidUrl(options.thumbnail)) embed.setThumbnail(options.thumbnail);
 
             if (field1Val) {
@@ -272,7 +275,6 @@ client.on('interactionCreate', async (interaction) => {
 
             await targetChannel.send(messagePayload);
 
-            // DM Members if enabled
             if (options.sendDM) {
                 try {
                     const members = await interaction.guild.members.fetch();
@@ -385,7 +387,6 @@ client.on('interactionCreate', async (interaction) => {
                     return interaction.reply({ content: 'Target role could not be found on this server.', ephemeral: true });
                 }
 
-                // Check bot role position hierarchy before adding/removing
                 const botMember = await interaction.guild.members.fetchMe();
                 if (role.position >= botMember.roles.highest.position) {
                     return interaction.reply({ content: 'I cannot manage this role because it is higher than or equal to my highest role.', ephemeral: true });
